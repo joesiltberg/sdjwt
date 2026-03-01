@@ -259,6 +259,9 @@ func processObject(obj map[string]any, discMap map[string]*disclosure, used map[
 				if disc.isArray {
 					return errors.New("sdjwt: array disclosure referenced in _sd")
 				}
+				if _, exists := obj[disc.name]; exists {
+					return fmt.Errorf("sdjwt: disclosed claim name %q already exists", disc.name)
+				}
 				obj[disc.name] = disc.value
 				used[digest] = true
 			}
