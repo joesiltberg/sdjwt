@@ -23,8 +23,9 @@ type Claims struct {
 type Option func(*verifyConfig)
 
 type verifyConfig struct {
-	now                func() time.Time
-	skipTimeValidation bool
+	now      func() time.Time
+	issuer   string
+	audience string
 }
 
 // WithTime sets a fixed time for exp/nbf validation instead of the system clock.
@@ -34,10 +35,17 @@ func WithTime(t time.Time) Option {
 	}
 }
 
-// WithoutTimeValidation disables exp and nbf validation.
-func WithoutTimeValidation() Option {
+// WithIssuer requires the iss claim to match the expected issuer.
+func WithIssuer(issuer string) Option {
 	return func(c *verifyConfig) {
-		c.skipTimeValidation = true
+		c.issuer = issuer
+	}
+}
+
+// WithAudience requires the aud claim to contain the expected audience.
+func WithAudience(audience string) Option {
+	return func(c *verifyConfig) {
+		c.audience = audience
 	}
 }
 
@@ -127,10 +135,14 @@ func verifyJWS(jwtPart string, key crypto.PublicKey, cfg *verifyConfig) (map[str
 		}),
 	}
 
-	if cfg.skipTimeValidation {
-		parserOpts = append(parserOpts, jwt.WithoutClaimsValidation())
-	} else if cfg.now != nil {
+	if cfg.now != nil {
 		parserOpts = append(parserOpts, jwt.WithTimeFunc(cfg.now))
+	}
+	if cfg.issuer != "" {
+		parserOpts = append(parserOpts, jwt.WithIssuer(cfg.issuer))
+	}
+	if cfg.audience != "" {
+		parserOpts = append(parserOpts, jwt.WithAudience(cfg.audience))
 	}
 
 	tok, err := jwt.Parse(jwtPart, func(t *jwt.Token) (any, error) {
