@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -87,27 +88,29 @@ func Verify(token string, key crypto.PublicKey, opts ...Option) (*Claims, error)
 }
 
 // parseSDJWT splits an SD-JWT compact serialization into the issuer-signed JWT
-// and disclosure strings.
+// and disclosure strings. The token must end with a trailing '~' (SD-JWT without
+// Key Binding). SD-JWT+KB (Key Binding) is not yet supported.
 func parseSDJWT(token string) (string, []string, error) {
 	if token == "" {
 		return "", nil, errors.New("sdjwt: empty token")
 	}
 
-	parts := strings.Split(token, "~")
-	if len(parts) < 2 {
-		return "", nil, errors.New("sdjwt: invalid SD-JWT format")
+	if !strings.HasSuffix(token, "~") {
+		return "", nil, errors.New("sdjwt: SD-JWT+KB (Key Binding) is not supported")
 	}
+
+	parts := strings.Split(token, "~")
+	// With trailing ~, Split always produces at least ["", ""].
+	// parts[len(parts)-1] is always "" (the trailing empty string).
 
 	jwtPart := parts[0]
 	if jwtPart == "" {
 		return "", nil, errors.New("sdjwt: empty JWT part")
 	}
 
-	var disclosures []string
-	for _, d := range parts[1 : len(parts)-1] {
-		if d != "" {
-			disclosures = append(disclosures, d)
-		}
+	disclosures := parts[1 : len(parts)-1]
+	if slices.Contains(disclosures, "") {
+		return "", nil, errors.New("sdjwt: empty disclosure segment")
 	}
 
 	return jwtPart, disclosures, nil

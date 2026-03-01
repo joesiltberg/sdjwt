@@ -1,5 +1,7 @@
 package sdjwt
 
+// Tests in this file are based on the examples in RFC 9901.
+
 import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -66,16 +68,16 @@ const rfc9901JWT = "eyJhbGciOiAiRVMyNTYiLCAidHlwIjogImV4YW1wbGUrc2Qtand0In0." +
 // Each is a base64url-encoded JSON array: [salt, claim_name, value] for
 // object properties, or [salt, value] for array elements.
 const (
-	discGivenName           = "WyIyR0xDNDJzS1F2ZUNmR2ZyeU5STjl3IiwgImdpdmVuX25hbWUiLCAiSm9obiJd"                                                                                                     // ["...", "given_name", "John"]
-	discFamilyName          = "WyJlbHVWNU9nM2dTTklJOEVZbnN4QV9BIiwgImZhbWlseV9uYW1lIiwgIkRvZSJd"                                                                                                     // ["...", "family_name", "Doe"]
-	discEmail               = "WyI2SWo3dE0tYTVpVlBHYm9TNXRtdlZBIiwgImVtYWlsIiwgImpvaG5kb2VAZXhhbXBsZS5jb20iXQ"                                                                                       // ["...", "email", "johndoe@example.com"]
-	discPhoneNumber         = "WyJlSThaV205UW5LUHBOUGVOZW5IZGhRIiwgInBob25lX251bWJlciIsICIrMS0yMDItNTU1LTAxMDEiXQ"                                                                                     // ["...", "phone_number", "+1-202-555-0101"]
-	discPhoneNumberVerified = "WyJRZ19PNjR6cUF4ZTQxMmExMDhpcm9BIiwgInBob25lX251bWJlcl92ZXJpZmllZCIsIHRydWVd"                                                                                           // ["...", "phone_number_verified", true]
+	discGivenName           = "WyIyR0xDNDJzS1F2ZUNmR2ZyeU5STjl3IiwgImdpdmVuX25hbWUiLCAiSm9obiJd"                                                                                                                    // ["...", "given_name", "John"]
+	discFamilyName          = "WyJlbHVWNU9nM2dTTklJOEVZbnN4QV9BIiwgImZhbWlseV9uYW1lIiwgIkRvZSJd"                                                                                                                    // ["...", "family_name", "Doe"]
+	discEmail               = "WyI2SWo3dE0tYTVpVlBHYm9TNXRtdlZBIiwgImVtYWlsIiwgImpvaG5kb2VAZXhhbXBsZS5jb20iXQ"                                                                                                      // ["...", "email", "johndoe@example.com"]
+	discPhoneNumber         = "WyJlSThaV205UW5LUHBOUGVOZW5IZGhRIiwgInBob25lX251bWJlciIsICIrMS0yMDItNTU1LTAxMDEiXQ"                                                                                                  // ["...", "phone_number", "+1-202-555-0101"]
+	discPhoneNumberVerified = "WyJRZ19PNjR6cUF4ZTQxMmExMDhpcm9BIiwgInBob25lX251bWJlcl92ZXJpZmllZCIsIHRydWVd"                                                                                                        // ["...", "phone_number_verified", true]
 	discAddress             = "WyJBSngtMDk1VlBycFR0TjRRTU9xUk9BIiwgImFkZHJlc3MiLCB7InN0cmVldF9hZGRyZXNzIjogIjEyMyBNYWluIFN0IiwgImxvY2FsaXR5IjogIkFueXRvd24iLCAicmVnaW9uIjogIkFueXN0YXRlIiwgImNvdW50cnkiOiAiVVMifV0" // ["...", "address", {"street_address": "123 Main St", ...}]
-	discBirthdate           = "WyJQYzMzSk0yTGNoY1VfbEhnZ3ZfdWZRIiwgImJpcnRoZGF0ZSIsICIxOTQwLTAxLTAxIl0"                                                                                               // ["...", "birthdate", "1940-01-01"]
-	discUpdatedAt           = "WyJHMDJOU3JRZmpGWFE3SW8wOXN5YWpBIiwgInVwZGF0ZWRfYXQiLCAxNTcwMDAwMDAwXQ"                                                                                                 // ["...", "updated_at", 1570000000]
-	discNationalityUS       = "WyJsa2x4RjVqTVlsR1RQVW92TU5JdkNBIiwgIlVTIl0"                                                                                                                             // ["...", "US"]
-	discNationalityDE       = "WyJuUHVvUW5rUkZxM0JJZUFtN0FuWEZBIiwgIkRFIl0"                                                                                                                             // ["...", "DE"]
+	discBirthdate           = "WyJQYzMzSk0yTGNoY1VfbEhnZ3ZfdWZRIiwgImJpcnRoZGF0ZSIsICIxOTQwLTAxLTAxIl0"                                                                                                             // ["...", "birthdate", "1940-01-01"]
+	discUpdatedAt           = "WyJHMDJOU3JRZmpGWFE3SW8wOXN5YWpBIiwgInVwZGF0ZWRfYXQiLCAxNTcwMDAwMDAwXQ"                                                                                                              // ["...", "updated_at", 1570000000]
+	discNationalityUS       = "WyJsa2x4RjVqTVlsR1RQVW92TU5JdkNBIiwgIlVTIl0"                                                                                                                                         // ["...", "US"]
+	discNationalityDE       = "WyJuUHVvUW5rUkZxM0JJZUFtN0FuWEZBIiwgIkRFIl0"                                                                                                                                         // ["...", "DE"]
 )
 
 // buildSDJWT constructs an SD-JWT (compact serialization) from the issuer-signed
