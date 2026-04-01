@@ -11,6 +11,7 @@ func TestParseSDJWT(t *testing.T) {
 		token           string
 		wantJWT         string
 		wantDisclosures []string
+		wantKBJWT       string
 		wantErr         bool
 		wantErrContains string
 	}{
@@ -20,16 +21,10 @@ func TestParseSDJWT(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name:            "no trailing tilde (Key Binding not supported)",
-			token:           "header.payload.signature~disc1~kb-jwt",
-			wantErr:         true,
-			wantErrContains: "Key Binding",
-		},
-		{
-			name:            "JWT without any tilde (Key Binding not supported)",
+			name:            "JWT without any tilde",
 			token:           "header.payload.signature",
 			wantErr:         true,
-			wantErrContains: "Key Binding",
+			wantErrContains: "missing trailing",
 		},
 		{
 			name:    "empty JWT part",
@@ -40,6 +35,12 @@ func TestParseSDJWT(t *testing.T) {
 			name:    "empty disclosure segment",
 			token:   "header.payload.signature~disc1~~disc2~",
 			wantErr: true,
+		},
+		{
+			name:            "empty disclosure segment before KB-JWT",
+			token:           "header.payload.signature~disc1~~kb-jwt",
+			wantErr:         true,
+			wantErrContains: "empty disclosure",
 		},
 		{
 			name:            "JWT only with trailing tilde (no disclosures)",
@@ -59,11 +60,25 @@ func TestParseSDJWT(t *testing.T) {
 			wantJWT:         "header.payload.signature",
 			wantDisclosures: []string{"disc1", "disc2", "disc3"},
 		},
+		{
+			name:            "SD-JWT+KB with disclosures",
+			token:           "header.payload.signature~disc1~disc2~kb-jwt",
+			wantJWT:         "header.payload.signature",
+			wantDisclosures: []string{"disc1", "disc2"},
+			wantKBJWT:       "kb-jwt",
+		},
+		{
+			name:            "SD-JWT+KB without disclosures",
+			token:           "header.payload.signature~kb-jwt",
+			wantJWT:         "header.payload.signature",
+			wantDisclosures: nil,
+			wantKBJWT:       "kb-jwt",
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			jwt, disclosures, err := parseSDJWT(tt.token)
+			jwt, disclosures, kbJWT, err := parseSDJWT(tt.token)
 			if tt.wantErr {
 				if err == nil {
 					t.Fatal("parseSDJWT() expected error, got nil")
@@ -86,6 +101,9 @@ func TestParseSDJWT(t *testing.T) {
 				if d != tt.wantDisclosures[i] {
 					t.Errorf("disclosures[%d] = %q, want %q", i, d, tt.wantDisclosures[i])
 				}
+			}
+			if kbJWT != tt.wantKBJWT {
+				t.Errorf("kbJWT = %q, want %q", kbJWT, tt.wantKBJWT)
 			}
 		})
 	}

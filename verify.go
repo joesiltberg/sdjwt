@@ -2,11 +2,15 @@ package sdjwt
 
 import (
 	"crypto"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rsa"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/big"
 	"slices"
 	"strings"
 	"time"
@@ -15,8 +19,10 @@ import (
 )
 
 // Claims holds the verified and processed payload of an SD-JWT.
+// When Key Binding is used, KeyBindingPayload contains the KB-JWT claims.
 type Claims struct {
-	Payload map[string]any
+	Payload           map[string]any
+	KeyBindingPayload map[string]any
 }
 
 // Option configures the behavior of Verify.
@@ -26,6 +32,9 @@ type verifyConfig struct {
 	now      func() time.Time
 	issuer   string
 	audience string
+	kbNonce  string
+	kbAud    string
+	kbRequired bool
 }
 
 // WithTime sets a fixed time for exp/nbf validation instead of the system clock.
@@ -49,6 +58,16 @@ func WithAudience(audience string) Option {
 	}
 }
 
+// WithKeyBinding requires the Holder to provide a Key Binding JWT (SD-JWT+KB).
+// The nonce and audience are verified against the KB-JWT claims.
+func WithKeyBinding(nonce, audience string) Option {
+	return func(c *verifyConfig) {
+		c.kbRequired = true
+		c.kbNonce = nonce
+		c.kbAud = audience
+	}
+}
+
 // Verify verifies an SD-JWT compact serialization, validates the issuer's
 // signature, processes disclosures, and returns the reconstructed claims.
 func Verify(token string, key crypto.PublicKey, opts ...Option) (*Claims, error) {
@@ -61,7 +80,7 @@ func Verify(token string, key crypto.PublicKey, opts ...Option) (*Claims, error)
 		o(cfg)
 	}
 
-	jwtPart, disclosures, err := parseSDJWT(token)
+	jwtPart, disclosures, kbJWT, err := parseSDJWT(token)
 	if err != nil {
 		return nil, err
 	}
@@ -92,36 +111,76 @@ func Verify(token string, key crypto.PublicKey, opts ...Option) (*Claims, error)
 
 	delete(payload, "_sd_alg")
 
-	return &Claims{Payload: payload}, nil
-}
+	result := &Claims{Payload: payload}
 
-// parseSDJWT splits an SD-JWT compact serialization into the issuer-signed JWT
-// and disclosure strings. The token must end with a trailing '~' (SD-JWT without
-// Key Binding). SD-JWT+KB (Key Binding) is not yet supported.
-func parseSDJWT(token string) (string, []string, error) {
-	if token == "" {
-		return "", nil, errors.New("sdjwt: empty token")
+	// Key Binding verification per RFC 9901 §7.3.
+	if cfg.kbRequired {
+		if kbJWT == "" {
+			return nil, errors.New("sdjwt: key binding required but no KB-JWT provided")
+		}
+
+		holderKey, err := holderKeyFromCnf(payload)
+		if err != nil {
+			return nil, err
+		}
+
+		// Compute sd_hash over the SD-JWT portion (everything before the KB-JWT).
+		sdJWTPortion := token[:len(token)-len(kbJWT)]
+		sdHash := computeSDHash(sdJWTPortion)
+
+		kbPayload, err := verifyKeyBindingJWT(kbJWT, holderKey, sdHash, cfg)
+		if err != nil {
+			return nil, err
+		}
+
+		delete(kbPayload, "sd_hash")
+		result.KeyBindingPayload = kbPayload
 	}
 
-	if !strings.HasSuffix(token, "~") {
-		return "", nil, errors.New("sdjwt: SD-JWT+KB (Key Binding) is not supported")
+	return result, nil
+}
+
+// parseSDJWT splits an SD-JWT or SD-JWT+KB compact serialization into the
+// issuer-signed JWT, disclosure strings, and an optional Key Binding JWT.
+// For SD-JWT (no Key Binding), kbJWT is empty. For SD-JWT+KB, kbJWT contains
+// the Key Binding JWT.
+func parseSDJWT(token string) (string, []string, string, error) {
+	if token == "" {
+		return "", nil, "", errors.New("sdjwt: empty token")
 	}
 
 	parts := strings.Split(token, "~")
-	// With trailing ~, Split always produces at least ["", ""].
-	// parts[len(parts)-1] is always "" (the trailing empty string).
+	// parts has at least 1 element (the JWT).
+	// SD-JWT:    JWT~D1~D2~...~DN~   → last element is ""
+	// SD-JWT+KB: JWT~D1~D2~...~DN~KB → last element is the KB-JWT
 
 	jwtPart := parts[0]
 	if jwtPart == "" {
-		return "", nil, errors.New("sdjwt: empty JWT part")
+		return "", nil, "", errors.New("sdjwt: empty JWT part")
 	}
 
-	disclosures := parts[1 : len(parts)-1]
+	if len(parts) < 2 {
+		return "", nil, "", errors.New("sdjwt: missing trailing '~'")
+	}
+
+	var kbJWT string
+	var disclosures []string
+
+	last := parts[len(parts)-1]
+	if last == "" {
+		// SD-JWT without Key Binding: trailing ~ produces empty last element.
+		disclosures = parts[1 : len(parts)-1]
+	} else {
+		// SD-JWT+KB: last element is the KB-JWT.
+		kbJWT = last
+		disclosures = parts[1 : len(parts)-1]
+	}
+
 	if slices.Contains(disclosures, "") {
-		return "", nil, errors.New("sdjwt: empty disclosure segment")
+		return "", nil, "", errors.New("sdjwt: empty disclosure segment")
 	}
 
-	return jwtPart, disclosures, nil
+	return jwtPart, disclosures, kbJWT, nil
 }
 
 // verifyJWS parses and verifies the issuer-signed JWT, returning the payload.
@@ -344,4 +403,171 @@ func processArray(arr []any, discMap map[string]*disclosure, used map[string]boo
 	}
 
 	return result, nil
+}
+
+// holderKeyFromCnf extracts the Holder's public key from the cnf claim
+// in the issuer-signed JWT payload per RFC 9901 §4.1.2 and RFC 7800.
+func holderKeyFromCnf(payload map[string]any) (crypto.PublicKey, error) {
+	cnfRaw, ok := payload["cnf"]
+	if !ok {
+		return nil, errors.New("sdjwt: cnf claim not found")
+	}
+	cnf, ok := cnfRaw.(map[string]any)
+	if !ok {
+		return nil, errors.New("sdjwt: cnf claim is not an object")
+	}
+	jwkRaw, ok := cnf["jwk"]
+	if !ok {
+		return nil, errors.New("sdjwt: cnf.jwk not found")
+	}
+	jwk, ok := jwkRaw.(map[string]any)
+	if !ok {
+		return nil, errors.New("sdjwt: cnf.jwk is not an object")
+	}
+
+	kty, _ := jwk["kty"].(string)
+	switch kty {
+	case "EC":
+		return parseECPublicKey(jwk)
+	case "RSA":
+		return parseRSAPublicKey(jwk)
+	default:
+		return nil, fmt.Errorf("sdjwt: unsupported key type: %q", kty)
+	}
+}
+
+// parseECPublicKey parses an EC public key from a JWK object.
+func parseECPublicKey(jwk map[string]any) (crypto.PublicKey, error) {
+	crv, _ := jwk["crv"].(string)
+	var curve elliptic.Curve
+	switch crv {
+	case "P-256":
+		curve = elliptic.P256()
+	case "P-384":
+		curve = elliptic.P384()
+	case "P-521":
+		curve = elliptic.P521()
+	default:
+		return nil, fmt.Errorf("sdjwt: unsupported EC curve: %q", crv)
+	}
+
+	x, err := decodeJWKCoord(jwk, "x")
+	if err != nil {
+		return nil, err
+	}
+	y, err := decodeJWKCoord(jwk, "y")
+	if err != nil {
+		return nil, err
+	}
+
+	return &ecdsa.PublicKey{Curve: curve, X: x, Y: y}, nil
+}
+
+// parseRSAPublicKey parses an RSA public key from a JWK object.
+func parseRSAPublicKey(jwk map[string]any) (crypto.PublicKey, error) {
+	nBytes, err := decodeJWKField(jwk, "n")
+	if err != nil {
+		return nil, err
+	}
+	eBytes, err := decodeJWKField(jwk, "e")
+	if err != nil {
+		return nil, err
+	}
+
+	n := new(big.Int).SetBytes(nBytes)
+	e := new(big.Int).SetBytes(eBytes)
+	if !e.IsInt64() {
+		return nil, errors.New("sdjwt: RSA exponent too large")
+	}
+
+	return &rsa.PublicKey{N: n, E: int(e.Int64())}, nil
+}
+
+// decodeJWKCoord decodes a base64url-encoded big integer coordinate from a JWK.
+func decodeJWKCoord(jwk map[string]any, field string) (*big.Int, error) {
+	b, err := decodeJWKField(jwk, field)
+	if err != nil {
+		return nil, err
+	}
+	return new(big.Int).SetBytes(b), nil
+}
+
+// decodeJWKField decodes a base64url-encoded field from a JWK.
+func decodeJWKField(jwk map[string]any, field string) ([]byte, error) {
+	s, ok := jwk[field].(string)
+	if !ok {
+		return nil, fmt.Errorf("sdjwt: JWK field %q missing or not a string", field)
+	}
+	b, err := base64.RawURLEncoding.DecodeString(s)
+	if err != nil {
+		return nil, fmt.Errorf("sdjwt: invalid JWK field %q: %w", field, err)
+	}
+	return b, nil
+}
+
+// computeSDHash computes the sd_hash over the SD-JWT portion (everything before
+// the KB-JWT), per RFC 9901 §4.3.1. Uses SHA-256 (same as _sd_alg).
+func computeSDHash(sdJWTPortion string) string {
+	hash := sha256.Sum256([]byte(sdJWTPortion))
+	return base64.RawURLEncoding.EncodeToString(hash[:])
+}
+
+// verifyKeyBindingJWT verifies the Key Binding JWT per RFC 9901 §7.3 step 5.
+func verifyKeyBindingJWT(kbJWT string, holderKey crypto.PublicKey, sdHash string, cfg *verifyConfig) (map[string]any, error) {
+	parserOpts := []jwt.ParserOption{
+		jwt.WithValidMethods([]string{
+			"ES256", "ES384", "ES512",
+			"RS256", "RS384", "RS512",
+			"PS256", "PS384", "PS512",
+			"EdDSA",
+		}),
+	}
+
+	if cfg.now != nil {
+		parserOpts = append(parserOpts, jwt.WithTimeFunc(cfg.now))
+	}
+
+	tok, err := jwt.Parse(kbJWT, func(t *jwt.Token) (any, error) {
+		return holderKey, nil
+	}, parserOpts...)
+	if err != nil {
+		return nil, fmt.Errorf("sdjwt: KB-JWT verification failed: %w", err)
+	}
+
+	// Check typ header is "kb+jwt" per §7.3 step 5d.
+	typ, _ := tok.Header["typ"].(string)
+	if typ != "kb+jwt" {
+		return nil, fmt.Errorf("sdjwt: KB-JWT typ is %q, want \"kb+jwt\"", typ)
+	}
+
+	claims, ok := tok.Claims.(jwt.MapClaims)
+	if !ok {
+		return nil, errors.New("sdjwt: unexpected KB-JWT claims type")
+	}
+	kbPayload := map[string]any(claims)
+
+	// Check iat is present per §4.3.
+	if _, ok := kbPayload["iat"]; !ok {
+		return nil, errors.New("sdjwt: KB-JWT missing required iat claim")
+	}
+
+	// Validate nonce per §7.3 step 5f.
+	nonce, _ := kbPayload["nonce"].(string)
+	if nonce != cfg.kbNonce {
+		return nil, errors.New("sdjwt: KB-JWT nonce mismatch")
+	}
+
+	// Validate aud per §7.3 step 5f.
+	aud, _ := kbPayload["aud"].(string)
+	if aud != cfg.kbAud {
+		return nil, errors.New("sdjwt: KB-JWT audience mismatch")
+	}
+
+	// Validate sd_hash per §7.3 step 5g.
+	claimedHash, _ := kbPayload["sd_hash"].(string)
+	if claimedHash != sdHash {
+		return nil, errors.New("sdjwt: KB-JWT sd_hash mismatch")
+	}
+
+	return kbPayload, nil
 }

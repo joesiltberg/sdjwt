@@ -80,12 +80,39 @@ const (
 	discNationalityDE       = "WyJuUHVvUW5rUkZxM0JJZUFtN0FuWEZBIiwgIkRFIl0"                                                                                                                                         // ["...", "DE"]
 )
 
+// Key Binding JWT from RFC 9901 Section 5.2.
+// Header: {"alg": "ES256", "typ": "kb+jwt"}
+// Payload:
+//   - nonce: "1234567890"
+//   - aud: "https://verifier.example.org"
+//   - iat: 1748537244
+//   - sd_hash: "0_Af-2B-EhLWX5ydh_w2xzwmO6iM66B_2QCEanI4fUY"
+const rfc9901KBJWT = "eyJhbGciOiAiRVMyNTYiLCAidHlwIjogImtiK2p3dCJ9." +
+	"eyJub25jZSI6ICIxMjM0NTY3ODkwIiwgImF1ZCI6ICJodHRwczovL3ZlcmlmaWVy" +
+	"LmV4YW1wbGUub3JnIiwgImlhdCI6IDE3NDg1MzcyNDQsICJzZF9oYXNoIjogIjBf" +
+	"QWYtMkItRWhMV1g1eWRoX3cyeHp3bU82aU02NkJfMlFDRWFuSTRmVVkifQ." +
+	"T3SIus2OidNl41nmVkTZVCKKhOAX97aOldMyHFiYjHm261eLiJ1YiuONFiMN8Ql" +
+	"CmYzDlBLAdPvrXh52KaLgUQ"
+
+// rfc9901KBVerifyTime is a fixed time for verifying the §5.2 SD-JWT+KB example.
+// It must be after the KB-JWT iat (1748537244) and within the issuer JWT validity
+// window (iat=1683000000, exp=1883000000).
+var rfc9901KBVerifyTime = time.Unix(1748537245, 0)
+
 // buildSDJWT constructs an SD-JWT (compact serialization) from the issuer-signed
 // JWT and selected disclosures, ending with a trailing tilde.
 func buildSDJWT(jwt string, disclosures ...string) string {
 	parts := []string{jwt}
 	parts = append(parts, disclosures...)
 	return strings.Join(parts, "~") + "~"
+}
+
+// buildSDJWTKB constructs an SD-JWT+KB (compact serialization) from the
+// issuer-signed JWT, selected disclosures, and a Key Binding JWT.
+func buildSDJWTKB(jwt string, kbJWT string, disclosures ...string) string {
+	parts := []string{jwt}
+	parts = append(parts, disclosures...)
+	return strings.Join(parts, "~") + "~" + kbJWT
 }
 
 func assertStringClaim(t *testing.T, claims *Claims, key, want string) {
@@ -422,5 +449,134 @@ func TestVerify_NilKey(t *testing.T) {
 	_, err := Verify(token, nil)
 	if err == nil {
 		t.Fatal("Verify() should return error for nil key")
+	}
+}
+
+// TestVerify_RFC9901_Section5_KeyBinding verifies an SD-JWT+KB from RFC 9901
+// Section 5.2 with Key Binding. The same four disclosures as the selective
+// disclosure test are used (given_name, family_name, address, US nationality).
+func TestVerify_RFC9901_Section5_KeyBinding(t *testing.T) {
+	key := rfc9901IssuerKey(t)
+	token := buildSDJWTKB(rfc9901JWT, rfc9901KBJWT,
+		discFamilyName, discAddress,
+		discGivenName, discNationalityUS,
+	)
+
+	claims, err := Verify(token, key,
+		WithTime(rfc9901KBVerifyTime),
+		WithKeyBinding("1234567890", "https://verifier.example.org"),
+	)
+	if err != nil {
+		t.Fatalf("Verify() error = %v", err)
+	}
+	if claims == nil {
+		t.Fatal("Verify() returned nil claims")
+	}
+
+	// Always-visible claims
+	assertStringClaim(t, claims, "iss", "https://issuer.example.com")
+	assertStringClaim(t, claims, "sub", "user_42")
+	assertFloat64Claim(t, claims, "iat", 1683000000)
+	assertFloat64Claim(t, claims, "exp", 1883000000)
+
+	// Selectively disclosed claims
+	assertStringClaim(t, claims, "given_name", "John")
+	assertStringClaim(t, claims, "family_name", "Doe")
+
+	// Address (flat disclosure as an object)
+	addr, ok := claims.Payload["address"].(map[string]any)
+	if !ok {
+		t.Fatal("address claim is not a map[string]any")
+	}
+	if addr["street_address"] != "123 Main St" {
+		t.Errorf("address.street_address = %v, want '123 Main St'", addr["street_address"])
+	}
+
+	// Only US nationality disclosed
+	nats, ok := claims.Payload["nationalities"].([]any)
+	if !ok {
+		t.Fatal("nationalities claim is not a []any")
+	}
+	if len(nats) != 1 || nats[0] != "US" {
+		t.Errorf("nationalities = %v, want [US]", nats)
+	}
+
+	// cnf should be present (permanently disclosed)
+	if _, ok := claims.Payload["cnf"]; !ok {
+		t.Error("cnf claim not found in processed payload")
+	}
+
+	// KeyBindingPayload should contain the KB-JWT claims
+	if claims.KeyBindingPayload == nil {
+		t.Fatal("KeyBindingPayload is nil, expected KB-JWT claims")
+	}
+	if claims.KeyBindingPayload["nonce"] != "1234567890" {
+		t.Errorf("KB nonce = %v, want 1234567890", claims.KeyBindingPayload["nonce"])
+	}
+	if claims.KeyBindingPayload["aud"] != "https://verifier.example.org" {
+		t.Errorf("KB aud = %v, want https://verifier.example.org", claims.KeyBindingPayload["aud"])
+	}
+
+	// Non-disclosed claims must be absent
+	assertClaimAbsent(t, claims, "email")
+	assertClaimAbsent(t, claims, "phone_number")
+	assertClaimAbsent(t, claims, "birthdate")
+
+	// SD-JWT internal claims must be removed
+	assertClaimAbsent(t, claims, "_sd")
+	assertClaimAbsent(t, claims, "_sd_alg")
+}
+
+// TestVerify_RFC9901_KeyBindingRequired_BareSDJWT verifies that a bare SD-JWT
+// (without KB-JWT) is rejected when Key Binding is required per §7.3 step 2.
+func TestVerify_RFC9901_KeyBindingRequired_BareSDJWT(t *testing.T) {
+	key := rfc9901IssuerKey(t)
+	token := buildSDJWT(rfc9901JWT,
+		discFamilyName, discAddress,
+		discGivenName, discNationalityUS,
+	)
+
+	_, err := Verify(token, key,
+		WithTime(rfc9901VerifyTime),
+		WithKeyBinding("1234567890", "https://verifier.example.org"),
+	)
+	if err == nil {
+		t.Fatal("Verify() should reject bare SD-JWT when Key Binding is required")
+	}
+}
+
+// TestVerify_RFC9901_KeyBinding_WrongNonce verifies that an SD-JWT+KB is rejected
+// when the nonce does not match the verifier's expected value.
+func TestVerify_RFC9901_KeyBinding_WrongNonce(t *testing.T) {
+	key := rfc9901IssuerKey(t)
+	token := buildSDJWTKB(rfc9901JWT, rfc9901KBJWT,
+		discFamilyName, discAddress,
+		discGivenName, discNationalityUS,
+	)
+
+	_, err := Verify(token, key,
+		WithTime(rfc9901KBVerifyTime),
+		WithKeyBinding("wrong-nonce", "https://verifier.example.org"),
+	)
+	if err == nil {
+		t.Fatal("Verify() should reject SD-JWT+KB with wrong nonce")
+	}
+}
+
+// TestVerify_RFC9901_KeyBinding_WrongAudience verifies that an SD-JWT+KB is
+// rejected when the audience does not match the verifier's expected value.
+func TestVerify_RFC9901_KeyBinding_WrongAudience(t *testing.T) {
+	key := rfc9901IssuerKey(t)
+	token := buildSDJWTKB(rfc9901JWT, rfc9901KBJWT,
+		discFamilyName, discAddress,
+		discGivenName, discNationalityUS,
+	)
+
+	_, err := Verify(token, key,
+		WithTime(rfc9901KBVerifyTime),
+		WithKeyBinding("1234567890", "https://wrong.example.org"),
+	)
+	if err == nil {
+		t.Fatal("Verify() should reject SD-JWT+KB with wrong audience")
 	}
 }
