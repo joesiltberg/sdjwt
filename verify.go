@@ -2,6 +2,7 @@ package sdjwt
 
 import (
 	"crypto"
+	"crypto/ecdh"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rsa"
@@ -440,26 +441,44 @@ func holderKeyFromCnf(payload map[string]any) (crypto.PublicKey, error) {
 func parseECPublicKey(jwk map[string]any) (crypto.PublicKey, error) {
 	crv, _ := jwk["crv"].(string)
 	var curve elliptic.Curve
+	var ecdhCurve ecdh.Curve
 	switch crv {
 	case "P-256":
 		curve = elliptic.P256()
+		ecdhCurve = ecdh.P256()
 	case "P-384":
 		curve = elliptic.P384()
+		ecdhCurve = ecdh.P384()
 	case "P-521":
 		curve = elliptic.P521()
+		ecdhCurve = ecdh.P521()
 	default:
 		return nil, fmt.Errorf("sdjwt: unsupported EC curve: %q", crv)
 	}
 
-	x, err := decodeJWKCoord(jwk, "x")
+	byteLen := (curve.Params().BitSize + 7) / 8
+
+	xBytes, err := decodeJWKCoordBytes(jwk, "x", byteLen)
 	if err != nil {
 		return nil, err
 	}
-	y, err := decodeJWKCoord(jwk, "y")
+	yBytes, err := decodeJWKCoordBytes(jwk, "y", byteLen)
 	if err != nil {
 		return nil, err
 	}
 
+	// Validate the point is on the curve using crypto/ecdh.
+	// 0x04 prefix indicates uncompressed point format (SEC 1 §2.3.3): 0x04 || x || y.
+	uncompressed := make([]byte, 1+2*byteLen)
+	uncompressed[0] = 0x04
+	copy(uncompressed[1:], xBytes)
+	copy(uncompressed[1+byteLen:], yBytes)
+	if _, err := ecdhCurve.NewPublicKey(uncompressed); err != nil {
+		return nil, fmt.Errorf("sdjwt: invalid EC public key: %w", err)
+	}
+
+	x := new(big.Int).SetBytes(xBytes)
+	y := new(big.Int).SetBytes(yBytes)
 	return &ecdsa.PublicKey{Curve: curve, X: x, Y: y}, nil
 }
 
@@ -480,16 +499,29 @@ func parseRSAPublicKey(jwk map[string]any) (crypto.PublicKey, error) {
 		return nil, errors.New("sdjwt: RSA exponent too large")
 	}
 
-	return &rsa.PublicKey{N: n, E: int(e.Int64())}, nil
+	eInt := int(e.Int64())
+	if eInt < 3 {
+		return nil, errors.New("sdjwt: RSA exponent too small")
+	}
+
+	if n.BitLen() < 2048 {
+		return nil, errors.New("sdjwt: RSA modulus too small")
+	}
+
+	return &rsa.PublicKey{N: n, E: eInt}, nil
 }
 
-// decodeJWKCoord decodes a base64url-encoded big integer coordinate from a JWK.
-func decodeJWKCoord(jwk map[string]any, field string) (*big.Int, error) {
+// decodeJWKCoordBytes decodes a base64url-encoded coordinate from a JWK and
+// validates its byte length per RFC 7518 §6.2.1.2.
+func decodeJWKCoordBytes(jwk map[string]any, field string, expectedLen int) ([]byte, error) {
 	b, err := decodeJWKField(jwk, field)
 	if err != nil {
 		return nil, err
 	}
-	return new(big.Int).SetBytes(b), nil
+	if len(b) != expectedLen {
+		return nil, fmt.Errorf("sdjwt: JWK field %q has %d bytes, want %d", field, len(b), expectedLen)
+	}
+	return b, nil
 }
 
 // decodeJWKField decodes a base64url-encoded field from a JWK.
