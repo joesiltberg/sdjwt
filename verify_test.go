@@ -17,14 +17,23 @@ import (
 var rfc9901VerifyTime = time.Date(2023, time.May, 2, 0, 0, 1, 0, time.UTC)
 
 // rfc9901IssuerKey returns the EC public key from RFC 9901 Appendix A.5,
-// used to validate issuer signatures in the RFC examples.
+// used to validate issuer signatures in the RFC examples. If t is nil
+// (e.g. from Example functions), errors panic instead of failing the test.
 func rfc9901IssuerKey(t *testing.T) *ecdsa.PublicKey {
-	t.Helper()
-	decodeCoord := func(s string) *big.Int {
+	if t != nil {
 		t.Helper()
+	}
+	decodeCoord := func(s string) *big.Int {
+		if t != nil {
+			t.Helper()
+		}
 		b, err := base64.RawURLEncoding.DecodeString(s)
 		if err != nil {
-			t.Fatalf("decode JWK coordinate: %v", err)
+			if t != nil {
+				t.Fatalf("decode JWK coordinate: %v", err)
+			} else {
+				panic(err)
+			}
 		}
 		return new(big.Int).SetBytes(b)
 	}
