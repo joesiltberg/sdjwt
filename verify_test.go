@@ -580,3 +580,41 @@ func TestVerify_RFC9901_KeyBinding_WrongAudience(t *testing.T) {
 		t.Fatal("Verify() should reject SD-JWT+KB with wrong audience")
 	}
 }
+
+func TestVerify_KeyBinding_EmptyNonce(t *testing.T) {
+	key := rfc9901IssuerKey(t)
+	token := buildSDJWTKB(rfc9901JWT, rfc9901KBJWT,
+		discFamilyName, discAddress,
+		discGivenName, discNationalityUS,
+	)
+
+	_, err := Verify(token, key,
+		WithTime(rfc9901KBVerifyTime),
+		WithKeyBinding("", "https://verifier.example.org"),
+	)
+	if err == nil {
+		t.Fatal("Verify() should reject empty nonce")
+	}
+	if !strings.Contains(err.Error(), "non-empty") {
+		t.Errorf("error %q should mention non-empty", err.Error())
+	}
+}
+
+func TestVerify_KeyBinding_EmptyAudience(t *testing.T) {
+	key := rfc9901IssuerKey(t)
+	token := buildSDJWTKB(rfc9901JWT, rfc9901KBJWT,
+		discFamilyName, discAddress,
+		discGivenName, discNationalityUS,
+	)
+
+	_, err := Verify(token, key,
+		WithTime(rfc9901KBVerifyTime),
+		WithKeyBinding("1234567890", ""),
+	)
+	if err == nil {
+		t.Fatal("Verify() should reject empty audience")
+	}
+	if !strings.Contains(err.Error(), "non-empty") {
+		t.Errorf("error %q should mention non-empty", err.Error())
+	}
+}

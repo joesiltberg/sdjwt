@@ -19,6 +19,15 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
+// allowedSigningAlgs is the set of asymmetric JWS algorithms accepted for both
+// issuer-signed JWTs and Key Binding JWTs. Symmetric (HMAC) and "none" are excluded.
+var allowedSigningAlgs = []string{
+	"ES256", "ES384", "ES512",
+	"RS256", "RS384", "RS512",
+	"PS256", "PS384", "PS512",
+	"EdDSA",
+}
+
 // Claims holds the verified and processed payload of an SD-JWT.
 // When Key Binding is used, KeyBindingPayload contains the KB-JWT claims.
 type Claims struct {
@@ -60,7 +69,7 @@ func WithAudience(audience string) Option {
 }
 
 // WithKeyBinding requires the Holder to provide a Key Binding JWT (SD-JWT+KB).
-// The nonce and audience are verified against the KB-JWT claims.
+// The nonce and audience must be non-empty and are verified against the KB-JWT claims.
 func WithKeyBinding(nonce, audience string) Option {
 	return func(c *verifyConfig) {
 		c.kbRequired = true
@@ -116,6 +125,9 @@ func Verify(token string, key crypto.PublicKey, opts ...Option) (*Claims, error)
 
 	// Key Binding verification per RFC 9901 §7.3.
 	if cfg.kbRequired {
+		if cfg.kbNonce == "" || cfg.kbAud == "" {
+			return nil, errors.New("sdjwt: WithKeyBinding requires non-empty nonce and audience")
+		}
 		if kbJWT == "" {
 			return nil, errors.New("sdjwt: key binding required but no KB-JWT provided")
 		}
@@ -187,12 +199,7 @@ func parseSDJWT(token string) (string, []string, string, error) {
 // verifyJWS parses and verifies the issuer-signed JWT, returning the payload.
 func verifyJWS(jwtPart string, key crypto.PublicKey, cfg *verifyConfig) (map[string]any, error) {
 	parserOpts := []jwt.ParserOption{
-		jwt.WithValidMethods([]string{
-			"ES256", "ES384", "ES512",
-			"RS256", "RS384", "RS512",
-			"PS256", "PS384", "PS512",
-			"EdDSA",
-		}),
+		jwt.WithValidMethods(allowedSigningAlgs),
 	}
 
 	if cfg.now != nil {
@@ -220,6 +227,9 @@ func verifyJWS(jwtPart string, key crypto.PublicKey, cfg *verifyConfig) (map[str
 	return map[string]any(claims), nil
 }
 
+// getSDAlg extracts and validates the _sd_alg claim from the payload.
+// NOTE: if support for additional algorithms is added here, computeSDHash must
+// also be updated to use the corresponding hash function.
 func getSDAlg(payload map[string]any) (string, error) {
 	raw, ok := payload["_sd_alg"]
 	if !ok {
@@ -547,12 +557,7 @@ func computeSDHash(sdJWTPortion string) string {
 // verifyKeyBindingJWT verifies the Key Binding JWT per RFC 9901 §7.3 step 5.
 func verifyKeyBindingJWT(kbJWT string, holderKey crypto.PublicKey, sdHash string, cfg *verifyConfig) (map[string]any, error) {
 	parserOpts := []jwt.ParserOption{
-		jwt.WithValidMethods([]string{
-			"ES256", "ES384", "ES512",
-			"RS256", "RS384", "RS512",
-			"PS256", "PS384", "PS512",
-			"EdDSA",
-		}),
+		jwt.WithValidMethods(allowedSigningAlgs),
 	}
 
 	if cfg.now != nil {
