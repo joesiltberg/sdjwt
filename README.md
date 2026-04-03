@@ -20,6 +20,7 @@ This module implements **verifier** functionality only. It does not support issu
 
 - Issuance (creating SD-JWTs)
 - Holder operations (selecting disclosures, creating presentations)
+- Key Binding confirmation methods other than `cnf.jwk` (e.g., `jku`, `kid`, `x5c`)
 - Digest algorithms other than `sha-256`
 - JWS JSON serialization
 
