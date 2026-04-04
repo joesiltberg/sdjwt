@@ -1,4 +1,4 @@
-# sdjwt
+# sdjwt [![Go Reference](https://pkg.go.dev/badge/github.com/joesiltberg/sdjwt.svg)](https://pkg.go.dev/github.com/joesiltberg/sdjwt)
 
 Go implementation of [SD-JWT (RFC 9901)](https://datatracker.ietf.org/doc/rfc9901/) verification.
 
