@@ -25,6 +25,16 @@ jobs:
       - name: Test
         run: go test -race -count=1 ./...
 
+      - name: Coverage
+        run: |
+          go test -coverprofile=coverage.out ./...
+          COVERAGE=$(go tool cover -func=coverage.out | grep total | awk '{print $3}' | tr -d '%')
+          echo "Total coverage: ${COVERAGE}%"
+          if [ "$(echo "$COVERAGE < 95" | bc -l)" -eq 1 ]; then
+            echo "::error::Coverage ${COVERAGE}% is below 95% threshold"
+            exit 1
+          fi
+
   lint:
     runs-on: ubuntu-latest
     steps:

@@ -1,6 +1,9 @@
-# sdjwt [![Go Reference](https://pkg.go.dev/badge/github.com/joesiltberg/sdjwt.svg)](https://pkg.go.dev/github.com/joesiltberg/sdjwt)
+# sdjwt [![Go Reference](https://pkg.go.dev/badge/github.com/joesiltberg/sdjwt.svg)](https://pkg.go.dev/github.com/joesiltberg/sdjwt) ![Coverage](https://img.shields.io/badge/coverage-%3E95%25-brightgreen)
 
 Go implementation of [SD-JWT (RFC 9901)](https://datatracker.ietf.org/doc/rfc9901/) verification.
+
+- **One dependency** — [`golang-jwt/jwt/v5`](https://github.com/golang-jwt/jwt), a mature and widely-used JWT library
+- **Thoroughly tested** — coverage enforced above 95% in CI
 
 ## Scope
 
