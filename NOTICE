@@ -1,0 +1,21 @@
+This project is licensed under the Apache License, Version 2.0.
+
+Copyright 2026 Joe Siltberg
+
+---
+
+DERIVED MATERIAL FROM SD-JWT-PYTHON
+
+This project includes material derived from the sd-jwt-python project,
+available at https://github.com/openwallet-foundation-labs/sd-jwt-python.
+
+The original project is developed by OpenWallet Foundation Lab and
+licensed under the Apache License, Version 2.0.
+
+The derived material in this project consists of a transformed version
+of the original test suite, adapted for use in this Go module. The
+derived material is stored in the testdata directory of this project.
+
+Modifications include changes in structure and format.
+
+---
