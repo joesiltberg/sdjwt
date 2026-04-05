@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -112,52 +113,9 @@ func TestOWFReference(t *testing.T) {
 				t.Fatalf("re-unmarshal want: %v", err)
 			}
 
-			if !jsonEqual(got, want) {
+			if !reflect.DeepEqual(got, want) {
 				t.Errorf("claims mismatch\ngot:  %s\nwant: %s", gotJSON, wantJSON)
 			}
 		})
-	}
-}
-
-// jsonEqual performs a deep comparison of two JSON-decoded values,
-// treating integer and float representations of the same number as equal.
-func jsonEqual(a, b any) bool {
-	switch av := a.(type) {
-	case map[string]any:
-		bv, ok := b.(map[string]any)
-		if !ok || len(av) != len(bv) {
-			return false
-		}
-		for k, va := range av {
-			vb, ok := bv[k]
-			if !ok || !jsonEqual(va, vb) {
-				return false
-			}
-		}
-		return true
-	case []any:
-		bv, ok := b.([]any)
-		if !ok || len(av) != len(bv) {
-			return false
-		}
-		for i := range av {
-			if !jsonEqual(av[i], bv[i]) {
-				return false
-			}
-		}
-		return true
-	case float64:
-		bv, ok := b.(float64)
-		return ok && av == bv
-	case string:
-		bv, ok := b.(string)
-		return ok && av == bv
-	case bool:
-		bv, ok := b.(bool)
-		return ok && av == bv
-	case nil:
-		return b == nil
-	default:
-		return false
 	}
 }
